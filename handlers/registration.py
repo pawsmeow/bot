@@ -30,7 +30,7 @@ async def confirm_remove(callback: types.CallbackQuery):
     success = delete_user(user_id)
 
     if success:
-        await callback.message.edit_text("✅ Ваша анкета удалена и помещена в архив.")
+        await callback.message.edit_text("✅ Ваша анкета удалена.")
     else:
         await callback.message.edit_text("⚠️ Произошла ошибка при удалении.")
 

@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 DB_FILE = Path("users.json")
-ARCHIVE_FILE = Path("archive.json")
 
 
 def _load(path):
@@ -41,9 +40,6 @@ def delete_user(user_id):
     db = _load(DB_FILE)
     uid = str(user_id)
     if uid in db:
-        archive = _load(ARCHIVE_FILE)
-        archive[uid] = db[uid]
-        _save(ARCHIVE_FILE, archive)
         del db[uid]
         _save(DB_FILE, db)
         return True
