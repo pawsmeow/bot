@@ -1,136 +1,189 @@
 from aiogram import Router, F, types
 from aiogram.fsm.context import FSMContext
-from states import Register
-from file_db import is_registered, register_user, delete_user
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from keyboards.inline_kb import server_keyboard, roles_keyboard
 from config import ADMINS
-from file_db import get_user_data
-from aiogram import F, Router, types
-from handlers.admin_commands import reglament, rules
+from database import get_user, get_all_users
+from keyboards.admin_filter import filter_keyboard
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+
 router = Router()
 
-@router.message(F.text == "/remove")
-async def remove_profile_start(message: types.Message):
-    if not is_registered(message.from_user.id):
-        return await message.answer("У вас нет анкеты для удаления.")
+@router.callback_query(F.data.startswith("approve_"))
+async def approve(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+    await callback.message.edit_text("✅ Анкета принята")
+    await callback.bot.send_message(user_id, "Ваша анкета принята!")
 
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Подтвердить", callback_data="confirm_remove"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="cancel_remove")
-        ]
-    ])
-    await message.answer("⚠️ Вы уверены, что хотите удалить свою анкету? Это действие необратимо.", reply_markup=kb)
+@router.callback_query(F.data.startswith("reject_"))
+async def reject(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[1])
+    await callback.message.edit_text("❌ Анкета отклонена")
+    await callback.bot.send_message(user_id, "Ваша анкета отклонена.")
 
+@router.message(F.text.startswith("/reglament"))
+async def reglament(message: types.Message):
+    text = (
+        "📜 <b>Регламент участия в матчах Valhalla Gaming</b>\n\n"
+        "❓ <b>Что такое Valhalla Gaming?</b>\n"
+        "Valhalla Gaming — это серия еженедельных соревновательных матчей...\n"
+        "🔁 <b>Как проходит распределение игроков?</b>\n"
+        "Участники распределяются по командам рандомайзером...\n"
+        "🏆 <b>Как работает ранговая система?</b>\n"
+        "🎯 <b>Как начисляются баллы?</b>\n"
+        "• Убийства (Kills)\n• Ассисты\n• Победа в матче...\n"
+    )
+    await message.answer(text, parse_mode="HTML")
 
-@router.callback_query(F.data == "confirm_remove")
-async def confirm_remove(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-    success = delete_user(user_id)
+@router.message(F.text == "/rules")
+async def rules(message: types.Message):
+    text = (
+        "📏 <b>Правила поведения участников Valhalla Gaming</b>\n\n"
+        "🚫 <b>Запрещено:</b>\n• Токсичность\n• Читы\n• Обман\n\n"
+        "✅ <b>Рекомендуется:</b>\n• Уважение\n• Честная игра\n\n"
+        "🛡️ <b>Наказания:</b>\n• Варны, баны и пермабаны\n"
+    )
+    await message.answer(text, parse_mode="HTML")
 
-    if success:
-        await callback.message.edit_text("✅ Ваша анкета удалена.")
-    else:
-        await callback.message.edit_text("⚠️ Произошла ошибка при удалении.")
+@router.message(F.text.startswith("/sendall"))
+async def sendall(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("У вас нет доступа.")
+    text = message.text.replace("/sendall", "").strip()
+    if not text:
+        return await message.answer("Введите текст рассылки.")
 
-@router.callback_query(F.data == "cancel_remove")
-async def cancel_remove(callback: types.CallbackQuery):
-    await callback.message.edit_text("Удаление отменено.")
-    
-@router.message(F.text.startswith("/start"))
-async def start(message: types.Message, state: FSMContext):
-    args = message.text.split(maxsplit=1)
+    users = get_all_users()
+    for user in users:
+        try:
+            await message.bot.send_message(user["telegram_id"], text)
+        except:
+            pass
+    await message.answer("Рассылка отправлена.")
 
-    # Если пришёл аргумент /start rules или /start reglament
-    if len(args) > 1:
-        param = args[1].lower()
-        if param == "reglament":
-            await reglament(message)
-            return
-        elif param == "rules":
-            await rules(message)
-            return
+@router.message(F.text.startswith("/users"))
+async def list_users(message: types.Message):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("⛔ У вас нет доступа к этой команде.")
 
-    # Если пользователь уже зарегистрирован
-    if is_registered(message.from_user.id):
-        await message.answer("Вы уже зарегистрированы.")
-    else:
-        await state.set_state(Register.nickname)
-        await message.answer("Введите ваш ник в игре:")
-@router.message(Register.nickname)
-async def get_nickname(message: types.Message, state: FSMContext):
-    await state.update_data(nickname=message.text)
-    await state.set_state(Register.game_id)
-    await message.answer("Введите ваш ID из игры:")
+    args = message.text.strip().lower().split()[1:]
+    all_users = get_all_users()
+    if not all_users:
+        return await message.answer("❌ Пользователей пока нет.")
 
-@router.message(Register.game_id)
-async def get_game_id(message: types.Message, state: FSMContext):
-    await state.update_data(game_id=message.text)
-    await state.set_state(Register.server)
-    await message.answer("Выберите ваш сервер:", reply_markup=server_keyboard())
+    if args and args[0] == "count":
+        servers_count = {"RU": 0, "KZ": 0, "KRG": 0, "UZB": 0}
+        for user in all_users:
+            s = user.get("server", "").upper()
+            if s in servers_count:
+                servers_count[s] += 1
+        total = sum(servers_count.values())
+        text = "\n".join([f"{k}: {v}" for k, v in servers_count.items()])
+        text += f"\n\n<b>Всего: {total}</b>"
+        return await message.answer(text, parse_mode="HTML")
 
-@router.callback_query(F.data.startswith("server_"))
-async def choose_server(callback: types.CallbackQuery, state: FSMContext):
-    server = callback.data.split("_")[1].upper()
+    server_filter = None
+    role_filters = []
+
+    for arg in args:
+        upper = arg.upper()
+        if upper in ["RU", "KZ", "KRG", "UZB"]:
+            server_filter = upper
+        else:
+            role_filters.append(arg.capitalize())
+
+    msg_lines = []
+    for user in all_users:
+        uid = user["telegram_id"]
+        roles = user.get("role", "")
+        role_list = roles
+
+        if server_filter and user.get("server") != server_filter:
+            continue
+        if role_filters and all(r not in roles for r in role_filters):
+            continue
+
+        msg_lines.append(
+            f"👤 <b>{user.get('nickname')}</b>\n"
+            f"🆔 <code>{user.get('game_id')}</code>\n"
+            f"🌍 Сервер: {user.get('server')}\n"
+            f"🎮 Роли: {role_list}\n"
+            f"🔗 <a href='tg://user?id={uid}'>Профиль</a>\n———"
+        )
+
+    if not msg_lines:
+        return await message.answer("❌ Пользователей с такими фильтрами не найдено.")
+
+    MAX_LENGTH = 4000
+    text = ""
+    for line in msg_lines:
+        if len(text) + len(line) >= MAX_LENGTH:
+            await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+            text = ""
+        text += line + "\n"
+    if text:
+        await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+
+@router.message(F.text == "/filter_users")
+async def show_filter_menu(message: types.Message, state: FSMContext):
+    if message.from_user.id not in ADMINS:
+        return await message.answer("⛔ У вас нет доступа.")
+    await state.update_data(server=None, roles=[])
+    await message.answer("Выберите фильтры:", reply_markup=filter_keyboard())
+
+@router.callback_query(F.data.startswith("filter_server_"))
+async def toggle_server(callback: types.CallbackQuery, state: FSMContext):
+    server = callback.data.split("_")[-1]
     await state.update_data(server=server)
-    await state.set_state(Register.roles)
-    await callback.message.edit_text("Выберите ваши роли (от 1 до 5):", reply_markup=roles_keyboard())
+    data = await state.get_data()
+    await callback.message.edit_reply_markup(
+        reply_markup=filter_keyboard(selected_server=server, selected_roles=data.get("roles", [])))
+    await callback.answer()
 
-@router.callback_query(F.data.startswith("role_"))
+@router.callback_query(F.data.startswith("filter_role_"))
 async def toggle_role(callback: types.CallbackQuery, state: FSMContext):
-    role = callback.data.split("_", 1)[1]
+    role = callback.data.split("_")[-1]
     data = await state.get_data()
     selected = data.get("roles", [])
     if role in selected:
         selected.remove(role)
-    elif len(selected) < 5:
+    else:
         selected.append(role)
     await state.update_data(roles=selected)
-    await callback.message.edit_reply_markup(reply_markup=roles_keyboard(selected))
+    await callback.message.edit_reply_markup(
+        reply_markup=filter_keyboard(selected_server=data.get("server"), selected_roles=selected))
+    await callback.answer()
 
-@router.callback_query(F.data == "roles_done")
-async def finish_roles(callback: types.CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "filter_show")
+async def show_filtered_users(callback: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
-    if not data.get("roles"):
-        await callback.answer("Выберите хотя бы одну роль", show_alert=True)
-        return
+    server_filter = data.get("server")
+    role_filters = data.get("roles", [])
+    users = get_all_users()
 
-    user_id = callback.from_user.id
-    register_user(user_id, data)
+    msg_lines = []
+    for user in users:
+        uid = user["telegram_id"]
+        if server_filter and user.get("server") != server_filter:
+            continue
+        if role_filters and all(r not in user.get("role", "") for r in role_filters):
+            continue
+        msg_lines.append(
+            f"👤 <b>{user.get('nickname')}</b>\n"
+            f"🆔 <code>{user.get('game_id')}</code>\n"
+            f"🌍 {user.get('server')} | 🎮 {user.get('role')}\n"
+            f"🔗 <a href='tg://user?id={uid}'>Профиль</a>\n———"
+        )
 
-    text = (
-        f"Новая анкета:\n"
-        f"👤 Ник: {data['nickname']}\n"
-        f"🆔 ID: {data['game_id']}\n"
-        f"🌍 Сервер: {data['server']}\n"
-        f"🎮 Роли: {', '.join(data['roles'])}\n"
-        f"🔗 Профиль: <a href='tg://user?id={user_id}'>Профиль</a>"
-    )
+    if not msg_lines:
+        return await callback.message.answer("❌ Нет пользователей с такими фильтрами.")
 
-    from keyboards.inline_kb import approval_keyboard
-    for admin in ADMINS:
-        await callback.bot.send_message(admin, text, parse_mode="HTML", reply_markup=approval_keyboard(user_id))
+    text = ""
+    MAX = 4000
+    for line in msg_lines:
+        if len(text) + len(line) > MAX:
+            await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+            text = ""
+        text += line + "\n"
+    if text:
+        await callback.message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
 
-    await callback.message.edit_text("Анкета отправлена на проверку. Ожидайте ответа от админа.")
-    await state.clear()
-
-
-@router.message(F.text == "/profile")
-async def profile(message: types.Message):
-    user_id = message.from_user.id
-    data = get_user_data(user_id)
-
-    if not data:
-        return await message.answer("Вы еще не заполнили анкету. Используйте /start, чтобы начать регистрацию.")
-
-    text = (
-        f"<b>🧾 Ваш профиль:</b>\n\n"
-        f"👤 Ник: <b>{data.get('nickname')}</b>\n"
-        f"🆔 ID из игры: <code>{data.get('game_id')}</code>\n"
-        f"🌍 Сервер: {data.get('server')}\n"
-        f"🎮 Роли: {', '.join(data.get('roles', []))}\n"
-        f"🔗 Telegram: <a href='tg://user?id={user_id}'>Профиль</a>"
-    )
-
-    await message.answer(text, parse_mode="HTML", disable_web_page_preview=True)
+    await callback.answer()
